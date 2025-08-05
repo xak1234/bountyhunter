@@ -13,6 +13,13 @@ import json
 import time
 import sys
 
+# Import HTML report generator
+try:
+    from html_report_generator import HTMLReportGenerator
+    HTML_REPORT_AVAILABLE = True
+except ImportError:
+    HTML_REPORT_AVAILABLE = False
+
 def fix_go_path():
     """Automatically fix Go PATH for Windows systems"""
     if platform.system() == "Windows":
@@ -46,7 +53,15 @@ class EnhancedBugHuntingTool:
         self.root = root
         self.root.title("Enhanced Bug Hunting Reconnaissance Tool v2.0")
         self.root.geometry("900x700")
-
+        
+        # Enable window resizing and make it easier to drag
+        self.root.resizable(True, True)  # Allow both width and height resizing
+        self.root.minsize(800, 600)  # Set minimum window size
+        
+        # Make window easier to drag by binding mouse events to title bar
+        # We'll bind drag events to specific areas in setup_ui
+        self.drag_data = {"x": 0, "y": 0, "dragging": False}
+        
         # Dark theme
         self.root.configure(bg="#2E2E2E")
         self.style = {
@@ -73,6 +88,25 @@ class EnhancedBugHuntingTool:
         self.setup_ui()
         self.check_and_install_tools()
 
+    def _start_drag(self, event):
+        """Start window dragging"""
+        self.drag_data["x"] = event.x
+        self.drag_data["y"] = event.y
+        self.drag_data["dragging"] = True
+
+    def _on_drag(self, event):
+        """Handle window dragging"""
+        if self.drag_data["dragging"]:
+            deltax = event.x - self.drag_data["x"]
+            deltay = event.y - self.drag_data["y"]
+            x = self.root.winfo_x() + deltax
+            y = self.root.winfo_y() + deltay
+            self.root.geometry(f"+{x}+{y}")
+
+    def _stop_drag(self, event):
+        """Stop window dragging"""
+        self.drag_data["dragging"] = False
+
     def ensure_go_path_fixed(self):
         """Ensure Go PATH is properly set for tool detection"""
         if self.is_windows:
@@ -95,6 +129,24 @@ class EnhancedBugHuntingTool:
                 self.log(f"⚠️ Could not verify Go PATH: {str(e)}")
 
     def setup_ui(self):
+        # Create a draggable title bar frame
+        title_frame = tk.Frame(self.root, bg="#1E1E1E", height=30)
+        title_frame.pack(fill=tk.X, pady=0)
+        title_frame.pack_propagate(False)
+        
+        # Title label
+        title_label = tk.Label(title_frame, text="🐛 Enhanced Bug Hunting Reconnaissance Tool v2.0", 
+                              fg="#00FF00", bg="#1E1E1E", font=("Arial", 10, "bold"))
+        title_label.pack(side=tk.LEFT, padx=10, pady=5)
+        
+        # Make title bar draggable
+        title_frame.bind("<Button-1>", self._start_drag)
+        title_frame.bind("<B1-Motion>", self._on_drag)
+        title_frame.bind("<ButtonRelease-1>", self._stop_drag)
+        title_label.bind("<Button-1>", self._start_drag)
+        title_label.bind("<B1-Motion>", self._on_drag)
+        title_label.bind("<ButtonRelease-1>", self._stop_drag)
+        
         # Tool status frame at top
         status_frame = tk.LabelFrame(self.root, text="Tool Status", fg=self.style["fg"], bg=self.style["bg"])
         status_frame.pack(pady=5, padx=20, fill=tk.X)
@@ -252,10 +304,53 @@ class EnhancedBugHuntingTool:
         self.console_frame = tk.Frame(self.notebook, bg=self.style["bg"])
         self.notebook.add(self.console_frame, text="Console")
         
-        self.console_text = scrolledtext.ScrolledText(self.console_frame, height=15, bg="#3C3F41", fg=self.style["fg"])
+        # Status window with black background and green font
+        self.console_text = scrolledtext.ScrolledText(
+            self.console_frame, 
+            height=15, 
+            bg="#000000",  # Black background
+            fg="#00FF00",  # Green font
+            font=("Consolas", 9),  # Monospace font for better readability
+            insertbackground="#00FF00"  # Green cursor
+        )
         self.console_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         self.running = False
+        
+        # Add resize handle at bottom right
+        self._add_resize_handle()
+
+    def _add_resize_handle(self):
+        """Add a resize handle to the bottom right corner"""
+        # Create a small frame at the bottom right for resizing
+        resize_frame = tk.Frame(self.root, bg="#404040", width=20, height=20)
+        resize_frame.place(relx=1.0, rely=1.0, anchor="se")
+        resize_frame.pack_propagate(False)
+        
+        # Add a visual indicator (small triangle)
+        resize_label = tk.Label(resize_frame, text="⤡", fg="#00FF00", bg="#404040", font=("Arial", 8))
+        resize_label.pack(expand=True)
+        
+        # Bind resize events
+        resize_frame.bind("<Button-1>", self._start_resize)
+        resize_frame.bind("<B1-Motion>", self._on_resize)
+        resize_label.bind("<Button-1>", self._start_resize)
+        resize_label.bind("<B1-Motion>", self._on_resize)
+
+    def _start_resize(self, event):
+        """Start window resizing"""
+        self.resize_data = {"x": event.x_root, "y": event.y_root, "width": self.root.winfo_width(), "height": self.root.winfo_height()}
+
+    def _on_resize(self, event):
+        """Handle window resizing"""
+        if hasattr(self, 'resize_data'):
+            delta_x = event.x_root - self.resize_data["x"]
+            delta_y = event.y_root - self.resize_data["y"]
+            
+            new_width = max(800, self.resize_data["width"] + delta_x)
+            new_height = max(600, self.resize_data["height"] + delta_y)
+            
+            self.root.geometry(f"{new_width}x{new_height}")
 
     def check_and_install_tools(self):
         """Check tool status on startup"""
@@ -941,6 +1036,26 @@ class EnhancedBugHuntingTool:
             
             # Create results tabs
             self.create_results_tabs()
+            
+            # Generate HTML report
+            if HTML_REPORT_AVAILABLE and self.running:
+                try:
+                    self.log("📄 Generating comprehensive HTML report...")
+                    self.update_progress("Generating HTML report...")
+                    
+                    html_generator = HTMLReportGenerator()
+                    report_file = html_generator.generate_report(self.results, output_dir, domain)
+                    
+                    self.log(f"✅ HTML report generated: {report_file}")
+                    self.update_progress("HTML report generated!")
+                    
+                    # Add button to open HTML report
+                    self.add_open_report_button(report_file)
+                    
+                except Exception as e:
+                    self.log(f"⚠️ HTML report generation failed: {str(e)}")
+            elif not HTML_REPORT_AVAILABLE:
+                self.log("⚠️ HTML report generator not available")
             
             if self.running:
                 self.log("🎉 Bug hunting reconnaissance completed!")
@@ -3819,6 +3934,50 @@ http:
                     })
         
         return business_endpoints[:15]  # Limit results
+    
+    def add_open_report_button(self, report_file):
+        """Add a button to open the HTML report"""
+        try:
+            # Create a frame for the report button if it doesn't exist
+            if not hasattr(self, 'report_frame'):
+                self.report_frame = tk.Frame(self.root, bg=self.style["bg"])
+                self.report_frame.pack(pady=5, padx=20, fill=tk.X)
+            
+            # Remove existing report button if it exists
+            for widget in self.report_frame.winfo_children():
+                widget.destroy()
+            
+            # Create new report button
+            report_button = tk.Button(
+                self.report_frame, 
+                text="📄 Open HTML Report", 
+                command=lambda: self.open_html_report(report_file),
+                bg="#27ae60", 
+                fg="white",
+                font=("Arial", 10, "bold")
+            )
+            report_button.pack(pady=5)
+            
+        except Exception as e:
+            self.log(f"⚠️ Could not add report button: {str(e)}")
+    
+    def open_html_report(self, report_file):
+        """Open the HTML report in the default browser"""
+        try:
+            import webbrowser
+            import os
+            
+            # Convert to absolute path if needed
+            if not os.path.isabs(report_file):
+                report_file = os.path.abspath(report_file)
+            
+            # Open in default browser
+            webbrowser.open(f'file://{report_file}')
+            self.log(f"🌐 Opening HTML report in browser: {report_file}")
+            
+        except Exception as e:
+            self.log(f"⚠️ Could not open HTML report: {str(e)}")
+            messagebox.showerror("Error", f"Could not open HTML report: {str(e)}")
 
 
 if __name__ == "__main__":
