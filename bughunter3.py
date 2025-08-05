@@ -13,6 +13,34 @@ import json
 import time
 import sys
 
+def fix_go_path():
+    """Automatically fix Go PATH for Windows systems"""
+    if platform.system() == "Windows":
+        try:
+            # Get Go environment
+            result = subprocess.run(["go", "env", "GOPATH"], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                gopath = result.stdout.strip()
+                go_bin_path = os.path.join(gopath, "bin")
+                
+                # Check if Go bin is already in PATH
+                current_path = os.environ.get('PATH', '')
+                if go_bin_path not in current_path:
+                    # Add to current session PATH
+                    os.environ['PATH'] = go_bin_path + os.pathsep + current_path
+                    print(f"✅ Added {go_bin_path} to PATH for this session")
+                    return True
+                else:
+                    print(f"✅ Go bin path {go_bin_path} already in PATH")
+                    return True
+        except Exception as e:
+            print(f"⚠️ Could not fix Go PATH: {str(e)}")
+            return False
+    return True
+
+# Fix Go PATH at startup
+fix_go_path()
+
 class EnhancedBugHuntingTool:
     def __init__(self, root):
         self.root = root
@@ -38,9 +66,33 @@ class EnhancedBugHuntingTool:
         self.tool_status = {}
         self.installation_in_progress = False
         
+        # Ensure Go PATH is fixed
+        self.ensure_go_path_fixed()
+        
         # Initialize UI and check tools
         self.setup_ui()
         self.check_and_install_tools()
+
+    def ensure_go_path_fixed(self):
+        """Ensure Go PATH is properly set for tool detection"""
+        if self.is_windows:
+            try:
+                # Get Go environment
+                result = subprocess.run(["go", "env", "GOPATH"], capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    gopath = result.stdout.strip()
+                    go_bin_path = os.path.join(gopath, "bin")
+                    
+                    # Check if Go bin is already in PATH
+                    current_path = os.environ.get('PATH', '')
+                    if go_bin_path not in current_path:
+                        # Add to current session PATH
+                        os.environ['PATH'] = go_bin_path + os.pathsep + current_path
+                        self.log(f"✅ Added {go_bin_path} to PATH for tool detection")
+                    else:
+                        self.log(f"✅ Go bin path {go_bin_path} already in PATH")
+            except Exception as e:
+                self.log(f"⚠️ Could not verify Go PATH: {str(e)}")
 
     def setup_ui(self):
         # Tool status frame at top
@@ -64,6 +116,11 @@ class EnhancedBugHuntingTool:
                                        command=self.refresh_tool_status,
                                        bg="#6C757D", fg="white")
         self.refresh_button.pack(side=tk.LEFT, padx=5)
+        
+        self.fix_path_button = tk.Button(install_frame, text="🔧 Fix Go PATH", 
+                                        command=self.fix_go_path_clicked,
+                                        bg="#FF6B35", fg="white")
+        self.fix_path_button.pack(side=tk.LEFT, padx=5)
 
         # Domain input
         input_frame = tk.Frame(self.root, bg=self.style["bg"])
@@ -286,6 +343,10 @@ class EnhancedBugHuntingTool:
         try:
             self.log("🔧 Starting tool installation process...")
             
+            # First, refresh tool status to get current availability
+            self.log("🔍 Checking current tool status...")
+            self._check_tools_background()
+            
             # Check system requirements first
             if not self.check_system_requirements():
                 return
@@ -303,71 +364,75 @@ class EnhancedBugHuntingTool:
             }
             
             for tool, pkg in go_tools.items():
-                if not self.tool_status.get(tool, {}).get('available', False):
-                    self.log(f"Installing {tool}...")
-                    self.update_status_display(f"Installing {tool}...")
-                    
-                    try:
-                        cmd = ["go", "install", pkg]
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                        if result.returncode == 0:
-                            self.log(f"✅ {tool} installed successfully")
-                        else:
-                            # Try alternative installation methods for failed tools
-                            if tool == 'amass':
-                                self.log(f"⚠️ {tool} installation failed: {result.stderr}")
-                                self.log("Trying alternative amass installation...")
+                # Check if tool is already available before attempting installation
+                if self.tool_status.get(tool, {}).get('available', False):
+                    self.log(f"✅ {tool} is already installed and available")
+                    continue
+                
+                self.log(f"Installing {tool}...")
+                self.update_status_display(f"Installing {tool}...")
+                
+                try:
+                    cmd = ["go", "install", pkg]
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    if result.returncode == 0:
+                        self.log(f"✅ {tool} installed successfully")
+                    else:
+                        # Try alternative installation methods for failed tools
+                        if tool == 'amass':
+                            self.log(f"⚠️ {tool} installation failed: {result.stderr}")
+                            self.log("Trying alternative amass installation...")
+                            try:
+                                alt_cmd = ["go", "install", "github.com/owasp-amass/amass/v3/...@v3.23.3"]
+                                alt_result = subprocess.run(alt_cmd, capture_output=True, text=True, timeout=300)
+                                if alt_result.returncode == 0:
+                                    self.log(f"✅ {tool} installed successfully with alternative method")
+                                else:
+                                    self.log(f"⚠️ {tool} alternative installation also failed: {alt_result.stderr}")
+                            except Exception as e:
+                                self.log(f"⚠️ {tool} alternative installation error: {str(e)}")
+                        elif tool == 'aquatone':
+                            self.log(f"⚠️ {tool} installation failed: {result.stderr}")
+                            self.log("Aquatone has compatibility issues with newer Go versions.")
+                            self.log("Trying alternative installation methods...")
+                            
+                            # Try multiple alternative approaches
+                            alternatives = [
+                                ("v1.4.0", "github.com/michenriksen/aquatone@v1.4.0"),
+                                ("v1.3.0", "github.com/michenriksen/aquatone@v1.3.0"),
+                                ("v1.2.0", "github.com/michenriksen/aquatone@v1.2.0"),
+                                ("latest", "github.com/michenriksen/aquatone@latest")
+                            ]
+                            
+                            success = False
+                            for version_name, pkg in alternatives:
+                                if success:
+                                    break
                                 try:
-                                    alt_cmd = ["go", "install", "github.com/owasp-amass/amass/v3/...@v3.23.3"]
+                                    self.log(f"Trying aquatone {version_name}...")
+                                    alt_cmd = ["go", "install", pkg]
                                     alt_result = subprocess.run(alt_cmd, capture_output=True, text=True, timeout=300)
                                     if alt_result.returncode == 0:
-                                        self.log(f"✅ {tool} installed successfully with alternative method")
+                                        self.log(f"✅ {tool} installed successfully with {version_name}")
+                                        success = True
                                     else:
-                                        self.log(f"⚠️ {tool} alternative installation also failed: {alt_result.stderr}")
+                                        self.log(f"⚠️ {tool} {version_name} failed: {alt_result.stderr}")
                                 except Exception as e:
-                                    self.log(f"⚠️ {tool} alternative installation error: {str(e)}")
-                            elif tool == 'aquatone':
-                                self.log(f"⚠️ {tool} installation failed: {result.stderr}")
-                                self.log("Aquatone has compatibility issues with newer Go versions.")
-                                self.log("Trying alternative installation methods...")
-                                
-                                # Try multiple alternative approaches
-                                alternatives = [
-                                    ("v1.4.0", "github.com/michenriksen/aquatone@v1.4.0"),
-                                    ("v1.3.0", "github.com/michenriksen/aquatone@v1.3.0"),
-                                    ("v1.2.0", "github.com/michenriksen/aquatone@v1.2.0"),
-                                    ("latest", "github.com/michenriksen/aquatone@latest")
-                                ]
-                                
-                                success = False
-                                for version_name, pkg in alternatives:
-                                    if success:
-                                        break
-                                    try:
-                                        self.log(f"Trying aquatone {version_name}...")
-                                        alt_cmd = ["go", "install", pkg]
-                                        alt_result = subprocess.run(alt_cmd, capture_output=True, text=True, timeout=300)
-                                        if alt_result.returncode == 0:
-                                            self.log(f"✅ {tool} installed successfully with {version_name}")
-                                            success = True
-                                        else:
-                                            self.log(f"⚠️ {tool} {version_name} failed: {alt_result.stderr}")
-                                    except Exception as e:
-                                        self.log(f"⚠️ {tool} {version_name} error: {str(e)}")
-                                
-                                if not success:
-                                    self.log("⚠️ All aquatone installation methods failed.")
-                                    self.log("Aquatone may not be compatible with your Go version.")
-                                    self.log("Consider using alternative tools like:")
-                                    self.log("  - httpx for HTTP probing")
-                                    self.log("  - nuclei for vulnerability scanning")
-                                    self.log("  - Manual screenshot tools")
-                            else:
-                                self.log(f"⚠️ {tool} installation failed: {result.stderr}")
-                    except subprocess.TimeoutExpired:
-                        self.log(f"⚠️ {tool} installation timed out")
-                    except Exception as e:
-                        self.log(f"⚠️ {tool} installation error: {str(e)}")
+                                    self.log(f"⚠️ {tool} {version_name} error: {str(e)}")
+                            
+                            if not success:
+                                self.log("⚠️ All aquatone installation methods failed.")
+                                self.log("Aquatone may not be compatible with your Go version.")
+                                self.log("Consider using alternative tools like:")
+                                self.log("  - httpx for HTTP probing")
+                                self.log("  - nuclei for vulnerability scanning")
+                                self.log("  - Manual screenshot tools")
+                        else:
+                            self.log(f"⚠️ {tool} installation failed: {result.stderr}")
+                except subprocess.TimeoutExpired:
+                    self.log(f"⚠️ {tool} installation timed out")
+                except Exception as e:
+                    self.log(f"⚠️ {tool} installation error: {str(e)}")
             
             # Install Python tools
             python_tools = {
@@ -376,19 +441,23 @@ class EnhancedBugHuntingTool:
             }
             
             for tool, pkg in python_tools.items():
-                if not self.tool_status.get(tool, {}).get('available', False):
-                    self.log(f"Installing {tool}...")
-                    self.update_status_display(f"Installing {tool}...")
-                    
-                    try:
-                        cmd = ["pip3", "install", pkg]
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-                        if result.returncode == 0:
-                            self.log(f"✅ {tool} installed successfully")
-                        else:
-                            self.log(f"⚠️ {tool} installation failed: {result.stderr}")
-                    except Exception as e:
-                        self.log(f"⚠️ {tool} installation error: {str(e)}")
+                # Check if tool is already available before attempting installation
+                if self.tool_status.get(tool, {}).get('available', False):
+                    self.log(f"✅ {tool} is already installed and available")
+                    continue
+                
+                self.log(f"Installing {tool}...")
+                self.update_status_display(f"Installing {tool}...")
+                
+                try:
+                    cmd = ["pip3", "install", pkg]
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                    if result.returncode == 0:
+                        self.log(f"✅ {tool} installed successfully")
+                    else:
+                        self.log(f"⚠️ {tool} installation failed: {result.stderr}")
+                except Exception as e:
+                    self.log(f"⚠️ {tool} installation error: {str(e)}")
             
             # Install system tools
             self.install_system_tools()
@@ -456,11 +525,15 @@ class EnhancedBugHuntingTool:
         system_tools = ['nmap', 'whois']
         
         for tool in system_tools:
-            if not self.check_tool(tool):
-                self.log(f"Installing {tool}...")
-                self.update_status_display(f"Installing {tool}...")
+            # Check if tool is already available before attempting installation
+            if self.check_tool(tool):
+                self.log(f"✅ {tool} is already installed and available")
+                continue
+            
+            self.log(f"Installing {tool}...")
+            self.update_status_display(f"Installing {tool}...")
                 
-                try:
+            try:
                     if self.is_linux:
                         # Try different package managers
                         for cmd in [['apt', 'install', '-y'], ['yum', 'install', '-y'], ['pacman', '-S', '--noconfirm']]:
@@ -595,8 +668,15 @@ class EnhancedBugHuntingTool:
                             self.log("   - Run PowerShell as Administrator and execute:")
                             self.log("   - Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))")
                 
-                except Exception as e:
-                    self.log(f"⚠️ Error installing {tool}: {str(e)}")
+            except Exception as e:
+                self.log(f"⚠️ Error installing {tool}: {str(e)}")
+
+    def fix_go_path_clicked(self):
+        """Handle fix Go PATH button click"""
+        self.log("🔧 Fixing Go PATH...")
+        self.ensure_go_path_fixed()
+        self.log("🔄 Refreshing tool status after PATH fix...")
+        self.refresh_tool_status()
 
     def refresh_tool_status(self):
         """Refresh tool status"""
